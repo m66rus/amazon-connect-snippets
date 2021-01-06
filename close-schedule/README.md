@@ -20,7 +20,7 @@ action_type: String
 action_string: String
   This is used to hold the actionable data based on the type:
   If you use the recommendations above then:
-    L = a label that you could return ie "Team MTG", "Rememberance Day" then the Contact Flow contains the logic
+    L = a label that you could return ie "Team MTG", "Remembrance Day" then the Contact Flow contains the logic
     M = Text of message to be played, if the message starts with arn: then this will use a stored prompt
     Q = arn of the queue, as it may be out of hours you want contacts to goto a queue.
     
