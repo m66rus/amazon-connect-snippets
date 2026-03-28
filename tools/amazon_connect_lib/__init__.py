@@ -28,6 +28,8 @@ Public API
 ConnectEvent        Wraps the raw Connect Lambda event dict.
 get_ssm_parameter   Fetch + cache an SSM Parameter Store value.
 bust_ssm_cache      Invalidate the SSM parameter cache.
+get_connect_agent   Fetch + cache agent info for a contact via the Connect API.
+bust_agent_cache    Invalidate the agent info cache.
 build_response      Build a flat string-value dict for Connect.
 build_error_response Build a structured error dict for Connect.
 connect_handler     Decorator: wraps event in ConnectEvent, catches exceptions.
@@ -49,6 +51,8 @@ from .event import (
 from .utils import (
     get_ssm_parameter,
     bust_ssm_cache,
+    get_connect_agent,
+    bust_agent_cache,
     build_response,
     build_error_response,
     connect_handler,
@@ -74,6 +78,8 @@ __all__ = [
     # Utilities
     "get_ssm_parameter",
     "bust_ssm_cache",
+    "get_connect_agent",
+    "bust_agent_cache",
     "build_response",
     "build_error_response",
     "connect_handler",

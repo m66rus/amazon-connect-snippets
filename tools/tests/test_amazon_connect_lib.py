@@ -19,6 +19,8 @@ from amazon_connect_lib import (
     build_error_response,
     connect_handler,
     bust_ssm_cache,
+    get_connect_agent,
+    bust_agent_cache,
     CHANNEL_VOICE,
     CHANNEL_CHAT,
     CHANNEL_TASK,
@@ -428,6 +430,166 @@ class TestConnectHandlerDecorator(unittest.TestCase):
         self.assertEqual(results["channel"], "VOICE")
         self.assertEqual(results["caller"], "+15550001111")
         self.assertEqual(results["queue"], "SupportQueue")
+
+
+# ---------------------------------------------------------------------------
+# get_connect_agent tests
+# ---------------------------------------------------------------------------
+
+INSTANCE_ARN = "arn:aws:connect:us-east-1:123456789012:instance/inst-abc"
+CONTACT_ID = "contact-xyz"
+AGENT_ARN = "arn:aws:connect:us-east-1:123456789012:instance/inst-abc/agent/user-001"
+USER_ID = "user-001"
+
+
+def _make_connect_client(
+    agent_arn=AGENT_ARN,
+    username="jsmith",
+    first_name="Jane",
+    last_name="Smith",
+    email="jsmith@example.com",
+    routing_profile_id="rp-001",
+    routing_profile_arn="arn:aws:connect:us-east-1:123:instance/inst-abc/routing-profile/rp-001",
+    hierarchy_group_id=None,
+    hierarchy_group_arn=None,
+    no_agent=False,
+):
+    mock_client = MagicMock()
+
+    # describe_contact
+    if no_agent:
+        mock_client.describe_contact.return_value = {"Contact": {}}
+    else:
+        mock_client.describe_contact.return_value = {
+            "Contact": {
+                "AgentInfo": {"Id": agent_arn}
+            }
+        }
+
+    # describe_user
+    user = {
+        "Username": username,
+        "IdentityInfo": {
+            "FirstName": first_name,
+            "LastName": last_name,
+            "Email": email,
+        },
+        "RoutingProfileId": routing_profile_id,
+    }
+    if hierarchy_group_id:
+        user["HierarchyGroupId"] = hierarchy_group_id
+    mock_client.describe_user.return_value = {"User": user}
+
+    # describe_routing_profile
+    mock_client.describe_routing_profile.return_value = {
+        "RoutingProfile": {"RoutingProfileArn": routing_profile_arn}
+    }
+
+    # describe_user_hierarchy_group
+    if hierarchy_group_arn:
+        mock_client.describe_user_hierarchy_group.return_value = {
+            "HierarchyGroup": {"Arn": hierarchy_group_arn}
+        }
+
+    return mock_client
+
+
+class TestGetConnectAgent(unittest.TestCase):
+
+    def setUp(self):
+        bust_agent_cache()
+        _utils._connect_client = None
+
+    def test_returns_agent_dict_with_expected_keys(self):
+        mock_client = _make_connect_client()
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            result = get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+
+        self.assertIsNotNone(result)
+        for key in ("arn", "id", "username", "first_name", "last_name",
+                    "email", "routing_profile_id", "routing_profile_arn",
+                    "hierarchy_group_id", "hierarchy_group_arn"):
+            self.assertIn(key, result)
+
+    def test_agent_username_and_name(self):
+        mock_client = _make_connect_client(username="jsmith", first_name="Jane", last_name="Smith")
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            result = get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertEqual(result["username"], "jsmith")
+        self.assertEqual(result["first_name"], "Jane")
+        self.assertEqual(result["last_name"], "Smith")
+
+    def test_agent_arn_and_id(self):
+        mock_client = _make_connect_client(agent_arn=AGENT_ARN)
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            result = get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertEqual(result["arn"], AGENT_ARN)
+        self.assertEqual(result["id"], "user-001")  # last segment of ARN
+
+    def test_returns_none_when_no_agent_assigned(self):
+        mock_client = _make_connect_client(no_agent=True)
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            result = get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertIsNone(result)
+
+    def test_result_is_cached_on_second_call(self):
+        mock_client = _make_connect_client()
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        # describe_contact should only be called once
+        self.assertEqual(mock_client.describe_contact.call_count, 1)
+
+    def test_none_result_is_cached(self):
+        mock_client = _make_connect_client(no_agent=True)
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertEqual(mock_client.describe_contact.call_count, 1)
+
+    def test_bust_cache_clears_specific_contact(self):
+        mock_client = _make_connect_client()
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+            bust_agent_cache(CONTACT_ID)
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertEqual(mock_client.describe_contact.call_count, 2)
+
+    def test_bust_cache_clears_all(self):
+        mock_client = _make_connect_client()
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            get_connect_agent(INSTANCE_ARN, "contact-1")
+            get_connect_agent(INSTANCE_ARN, "contact-2")
+            bust_agent_cache()
+            get_connect_agent(INSTANCE_ARN, "contact-1")
+            get_connect_agent(INSTANCE_ARN, "contact-2")
+        self.assertEqual(mock_client.describe_contact.call_count, 4)
+
+    def test_hierarchy_group_none_when_not_set(self):
+        mock_client = _make_connect_client(hierarchy_group_id=None)
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            result = get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertIsNone(result["hierarchy_group_id"])
+        self.assertIsNone(result["hierarchy_group_arn"])
+
+    def test_hierarchy_group_populated_when_set(self):
+        mock_client = _make_connect_client(
+            hierarchy_group_id="arn:aws:connect:us-east-1:123:instance/abc/agent-group/hg-001",
+            hierarchy_group_arn="arn:aws:connect:us-east-1:123:instance/abc/agent-group/hg-001",
+        )
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            result = get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        self.assertIsNotNone(result["hierarchy_group_id"])
+        self.assertIsNotNone(result["hierarchy_group_arn"])
+
+    def test_instance_id_extracted_from_arn(self):
+        mock_client = _make_connect_client()
+        with patch("amazon_connect_lib.utils._get_connect_client", return_value=mock_client):
+            get_connect_agent(INSTANCE_ARN, CONTACT_ID)
+        mock_client.describe_contact.assert_called_once_with(
+            InstanceId="inst-abc",
+            ContactId=CONTACT_ID,
+        )
 
 
 if __name__ == "__main__":
